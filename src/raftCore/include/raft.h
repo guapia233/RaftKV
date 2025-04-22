@@ -148,14 +148,18 @@ class Raft : public raftRpcProctoc::raftRpc {
 
    public:  // 重写基类方法,因为 rpc 远程调用真正调用的是这些方法
     // 序列化，反序列化等操作 rpc 框架都已经做完了，因此这里只需要获取值然后真正调用本地方法即可
-    void AppendEntries(google::protobuf::RpcController *controller, const ::raftRpcProctoc::AppendEntriesArgs *request,
-                       ::raftRpcProctoc::AppendEntriesReply *response, ::google::protobuf::Closure *done) override;
+    void AppendEntries(google::protobuf::RpcController *controller, 
+                        const ::raftRpcProctoc::AppendEntriesArgs *request,
+                        ::raftRpcProctoc::AppendEntriesReply *response, 
+                        ::google::protobuf::Closure *done) override;
     void InstallSnapshot(google::protobuf::RpcController *controller,
                          const ::raftRpcProctoc::InstallSnapshotRequest *request,
                          ::raftRpcProctoc::InstallSnapshotResponse *response,
                          ::google::protobuf::Closure *done) override;
-    void RequestVote(google::protobuf::RpcController *controller, const ::raftRpcProctoc::RequestVoteArgs *request,
-                     ::raftRpcProctoc::RequestVoteReply *response, ::google::protobuf::Closure *done) override;
+    void RequestVote(google::protobuf::RpcController *controller, 
+                        const ::raftRpcProctoc::RequestVoteArgs *request,
+                        ::raftRpcProctoc::RequestVoteReply *response, 
+                        ::google::protobuf::Closure *done) override;
 
    public:
     void init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
