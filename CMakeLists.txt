@@ -39,7 +39,6 @@ add_subdirectory(example)
 add_library(skip_list_on_raft STATIC  ${src_rpc} ${src_fiber} ${rpc_example} ${raftsource} ${src_raftCore} ${src_raftRpcPro})
 target_link_libraries(skip_list_on_raft muduo_net muduo_base pthread dl)
 # 添加格式化目标 start
-# from : https://blog.csdn.net/guotianqing/article/details/121661067
 
 add_custom_target(format
         COMMAND bash ${PROJECT_SOURCE_DIR}/format.sh
