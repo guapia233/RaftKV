@@ -85,8 +85,8 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     //    std::cout << "args_str: " << args_str << std::endl;
     //    std::cout << "============================================" << std::endl;
 
-    // 发送 RPC 请求
-    // 失败会重试连接再发送，重试连接失败会直接 return
+    // 使用 send 函数循环发送 RPC 请求
+    // 如果 send 失败，说明连接可能断了，就关闭旧连接并重连，然后重发，如果还是失败，直接 return
     while (-1 == send(m_clientFd, send_rpc_str.c_str(), send_rpc_str.size(), 0)) {
         char errtxt[512] = {0};
         sprintf(errtxt, "send error! errno:%d", errno);
@@ -100,11 +100,10 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
             return;
         }
     }
-    /*
-    从时间节点来说，这里将请求发送过去之后rpc服务的提供者就会开始处理，返回的时候就代表着已经返回响应了
-    */
-
-    // 接收rpc请求的响应值
+    
+    // 从时间节点来说，这里将请求发送过去之后，RPC 服务的提供者就会开始处理，接收响应的时候就代表已经返回响应了
+  
+    // 接收 RPC 请求的响应结果，缓存在 recv_buf 中
     char recv_buf[1024] = {0};
     int recv_size = 0;
     if (-1 == (recv_size = recv(m_clientFd, recv_buf, 1024, 0))) {
@@ -116,10 +115,8 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         return;
     }
 
-    // 反序列化rpc调用的响应数据
-    // std::string response_str(recv_buf, 0, recv_size); //
-    // bug：出现问题，recv_buf中遇到\0后面的数据就存不下来了，导致反序列化失败 if
-    // (!response->ParseFromString(response_str))
+    // 反序列化 RPC 调用的响应结果，把 server 返回的数据反序列化填入调用者提供的 response 对象 
+    // 使用 ParseFromArray（而非 ParseFromString）是为了避免 \0 截断问题 
     if (!response->ParseFromArray(recv_buf, recv_size)) {
         char errtxt[1050] = {0};
         sprintf(errtxt, "parse error! response_str:%s", recv_buf);
