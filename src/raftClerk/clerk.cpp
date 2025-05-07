@@ -1,43 +1,45 @@
-//
-// Created by swx on 23-6-4.
-//
 #include "clerk.h"
-
 #include "raftServerRpcUtil.h"
-
 #include "util.h"
 
 #include <string>
 #include <vector>
+
+// 向 Raft 集群读取指定 key 的值
 std::string Clerk::Get(std::string key) {
     m_requestId++;
-    auto requestId = m_requestId;
-    int server = m_recentLeaderId;
+    auto requestId = m_requestId; // 生成一个新的 requestId
+    int server = m_recentLeaderId; // 从最可能是 leader 的节点开始
+    
+    // 填充参数
     raftKVRpcProctoc::GetArgs args;
     args.set_key(key);
     args.set_clientid(m_clientId);
     args.set_requestid(requestId);
 
+    // 会一直重试，因为 requestId 没有改变，可能会因为 RPC 失败或者不是 leader 导致重试，kvServer 层来保证不重复执行（线性一致性）
     while (true) {
         raftKVRpcProctoc::GetReply reply;
         bool ok = m_servers[server]->Get(&args, &reply);
-        if (!ok ||
-            reply.err() ==
-                ErrWrongLeader) {  // 会一直重试，因为requestId没有改变，因此可能会因为RPC的丢失或者其他情况导致重试，kvserver层来保证不重复执行（线性一致性）
+        // 若 RPC 调用失败或返回 ErrWrongLeader（表明该节点不是 leader），则轮询下一个节点
+        if (!ok || reply.err() == ErrWrongLeader) {  
+            // 以最近认为的 leader 开始，逐个尝试调用 Get RPC
             server = (server + 1) % m_servers.size();
             continue;
         }
-        if (reply.err() == ErrNoKey) {
+        if (reply.err() == ErrNoKey) { // 若返回 ErrNoKey，说明 key 不存在，返回空字符串。
             return "";
         }
-        if (reply.err() == OK) {
+        if (reply.err() == OK) { // 若返回 OK，说明请求成功，记录下新的 Leader，返回值
             m_recentLeaderId = server;
             return reply.value();
         }
     }
+    
     return "";
 }
 
+// 
 void Clerk::PutAppend(std::string key, std::string value, std::string op) {
     // 向集群写入一条 PutAppend 指令，内部循环重试，直到由当前 Leader 成功提交
     m_requestId++; // 为本次操作生成单调递增的全局请求号
