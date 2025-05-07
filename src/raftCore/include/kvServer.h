@@ -1,7 +1,3 @@
-//
-// Created by swx on 23-6-1.
-//
-
 #ifndef SKIP_LIST_ON_RAFT_KVSERVER_H
 #define SKIP_LIST_ON_RAFT_KVSERVER_H
 
@@ -22,113 +18,121 @@
 #include "raft.h"
 #include "skipList.h"
 
+// 继承自 raftKVRpcProctoc::kvServerRpc，意味着它实现了 RPC 服务端接口，是 Raft KV 协议的服务实现
 class KvServer : raftKVRpcProctoc::kvServerRpc {
- private:
-  std::mutex m_mtx;
-  int m_me;
-  std::shared_ptr<Raft> m_raftNode;
-  std::shared_ptr<LockQueue<ApplyMsg> > applyChan;  // kvServer和raft节点的通信管道
-  int m_maxRaftState;                               // snapshot if log grows this big
+   private:
+    std::mutex m_mtx;
+    int m_me;
+    std::shared_ptr<Raft> m_raftNode; // 封装的 Raft 节点实例
+    std::shared_ptr<LockQueue<ApplyMsg> > applyChan; // kvServer 和 raft 节点的通信管道，用于接收日志应用
+    int m_maxRaftState; // 日志大小阈值，超过就考虑生成快照
 
-  // Your definitions here.
-  std::string m_serializedKVData;  // todo ： 序列化后的kv数据，理论上可以不用，但是目前没有找到特别好的替代方法
-  SkipList<std::string, std::string> m_skipList;
-  std::unordered_map<std::string, std::string> m_kvDB;
+    std::string m_serializedKVData; // 中转变量，保存序列化后的 kv 数据
+    SkipList<std::string, std::string> m_skipList; // 上层数据库，使用跳表替代 map
+    std::unordered_map<std::string, std::string> m_kvDB;
 
-  std::unordered_map<int, LockQueue<Op> *> waitApplyCh;
-  // index(raft) -> chan  //？？？字段含义   waitApplyCh是一个map，键是int，值是Op类型的管道
+    // 将每个 log index 映射到一个 Op 队列，用于异步地等待 Raft apply 的响应，用于协调客户端 RPC 调用与状态机实际应用之间的同步
+    std::unordered_map<int, LockQueue<Op> *> waitApplyCh;
 
-  std::unordered_map<std::string, int> m_lastRequestId;  // clientid -> requestID  //一个kV服务器可能连接多个client
+    // 一个 kvServer 可能连接多个客户端，记录每个客户端最近一次请求的 requestId，用于幂等控制（防止重复执行）
+    std::unordered_map<std::string, int> m_lastRequestId;  
 
-  // last SnapShot point , raftIndex
-  int m_lastSnapShotRaftLogIndex;
+    // 最近一次执行快照的 raftIndex
+    int m_lastSnapShotRaftLogIndex;
 
- public:
-  KvServer() = delete;
+   public:
+    KvServer() = delete;
 
-  KvServer(int me, int maxraftstate, std::string nodeInforFileName, short port);
+    KvServer(int me, int maxraftstate, std::string nodeInforFileName, short port);
 
-  void StartKVServer();
+    void StartKVServer();
 
-  void DprintfKVDB();
+    void DprintfKVDB();
 
-  void ExecuteAppendOpOnKVDB(Op op);
+    void ExecuteAppendOpOnKVDB(Op op);
 
-  void ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist);
+    void ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist);
 
-  void ExecutePutOpOnKVDB(Op op);
+    void ExecutePutOpOnKVDB(Op op);
 
-  void Get(const raftKVRpcProctoc::GetArgs *args,
-           raftKVRpcProctoc::GetReply
-               *reply);  //将 GetArgs 改为rpc调用的，因为是远程客户端，即服务器宕机对客户端来说是无感的
-  /**
-   * 從raft節點中獲取消息  （不要誤以爲是執行【GET】命令）
-   * @param message
-   */
-  void GetCommandFromRaft(ApplyMsg message);
+    // 将 GetArgs 改为 RPC 调用的（不要与 Get 命令混淆），因为是远程客户端，服务器宕机对客户端来说是无感的
+    void Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetReply *reply);  
 
-  bool ifRequestDuplicate(std::string ClientId, int RequestId);
+    // 当 kvServer 从 applyChan 接收到 Raft commit 消息后的回调函数
+    // 它会从 message.command 中解析出一个 Op（PUT / APPEND / GET 操作），然后调用对应的函数，比如 ExecuteAppendOpOnKVDB(op);
 
-  // clerk 使用RPC远程调用
-  void PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcProctoc::PutAppendReply *reply);
+    void GetCommandFromRaft(ApplyMsg message); 
+    
+    // 幂等性控制：判断这个(clientId, requestId)是否重复处理过，防止 Put/Append 被重复应用
+    bool ifRequestDuplicate(std::string ClientId, int RequestId);
 
-  ////一直等待raft传来的applyCh
-  void ReadRaftApplyCommandLoop();
+    // clerk 使用 RPC 远程调用
+    void PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcProctoc::PutAppendReply *reply);
 
-  void ReadSnapShotToInstall(std::string snapshot);
+    // 一直等待 raft 传来的 applyCh
+    void ReadRaftApplyCommandLoop();
 
-  bool SendMessageToWaitChan(const Op &op, int raftIndex);
+    void ReadSnapShotToInstall(std::string snapshot);
 
-  // 检查是否需要制作快照，需要的话就向raft之下制作快照
-  void IfNeedToSendSnapShotCommand(int raftIndex, int proportion);
+    bool SendMessageToWaitChan(const Op &op, int raftIndex);
 
-  // Handler the SnapShot from kv.rf.applyCh
-  void GetSnapShotFromRaft(ApplyMsg message);
+    // 检查是否需要制作快照，需要的话就向 raft 之下制作快照
+    void IfNeedToSendSnapShotCommand(int raftIndex, int proportion);
 
-  std::string MakeSnapShot();
+    // Handler the SnapShot from kv.rf.applyCh
+    void GetSnapShotFromRaft(ApplyMsg message);
 
- public:  // for rpc
-  void PutAppend(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::PutAppendArgs *request,
-                 ::raftKVRpcProctoc::PutAppendReply *response, ::google::protobuf::Closure *done) override;
+    std::string MakeSnapShot();
 
-  void Get(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::GetArgs *request,
-           ::raftKVRpcProctoc::GetReply *response, ::google::protobuf::Closure *done) override;
+   public:  // RPC 实现，处理来自客户端的请求
+    void PutAppend(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::PutAppendArgs *request,
+                   ::raftKVRpcProctoc::PutAppendReply *response, ::google::protobuf::Closure *done) override;
 
-  /////////////////serialiazation start ///////////////////////////////
-  // notice ： func serialize
- private:
-  friend class boost::serialization::access;
+    void Get(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::GetArgs *request,
+             ::raftKVRpcProctoc::GetReply *response, ::google::protobuf::Closure *done) override;
 
-  // When the class Archive corresponds to an output archive, the
-  // & operator is defined similar to <<.  Likewise, when the class Archive
-  // is a type of input archive the & operator is defined similar to >>.
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version)  //这里面写需要序列话和反序列化的字段
-  {
-    ar &m_serializedKVData;
+    /////////////////serialiazation start ///////////////////////////////
+    // notice ： func serialize
+   private:
+    friend class boost::serialization::access;
 
-    // ar & m_kvDB;
-    ar &m_lastRequestId;
-  }
+    // When the class Archive corresponds to an output archive, the
+    // & operator is defined similar to <<.  Likewise, when the class Archive
+    // is a type of input archive the & operator is defined similar to >>.
+    // 并没有用 Boost 自动把 m_skipList 整个对象序列化，而是手动把它转成字符串，然后序列化这个字符串，再在恢复时用 load_file() 重新构建跳表
+    template <class Archive>
+    void serialize(Archive &ar, const unsigned int version)  // 这里面写需要序列化和反序列化的字段
+    {
+        ar & m_serializedKVData;
 
-  std::string getSnapshotData() {
-    m_serializedKVData = m_skipList.dump_file();
-    std::stringstream ss;
-    boost::archive::text_oarchive oa(ss);
-    oa << *this;
-    m_serializedKVData.clear();
-    return ss.str();
-  }
+        // ar & m_kvDB;
+        ar & m_lastRequestId;
+    }
 
-  void parseFromString(const std::string &str) {
-    std::stringstream ss(str);
-    boost::archive::text_iarchive ia(ss);
-    ia >> *this;
-    m_skipList.load_file(m_serializedKVData);
-    m_serializedKVData.clear();
-  }
+    /**
+     * 当 Raft 日志太长时，调用 getSnapshotData() 生成快照
+     * 快照包括：m_skipList（转存为字符串 m_serializedKVData）和 m_lastRequestId
+     * 利用 boost::archive 对自身对象序列化
+     * 快照内容再交由 Raft 保存
+     */
+    std::string getSnapshotData() {
+        m_serializedKVData = m_skipList.dump_file();
+        std::stringstream ss;
+        boost::archive::text_oarchive oa(ss);
+        oa << *this;
+        m_serializedKVData.clear();
+        return ss.str();
+    }
 
-  /////////////////serialiazation end ///////////////////////////////
+    void parseFromString(const std::string &str) {
+        std::stringstream ss(str);
+        boost::archive::text_iarchive ia(ss);
+        ia >> *this;
+        m_skipList.load_file(m_serializedKVData);
+        m_serializedKVData.clear();
+    }
+
+    /////////////////serialiazation end ///////////////////////////////
 };
 
 #endif  // SKIP_LIST_ON_RAFT_KVSERVER_H
