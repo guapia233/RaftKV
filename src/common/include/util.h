@@ -120,27 +120,21 @@ class LockQueue {
 // 这个 Op 是 kvServer 传递给 raft集群 的 command
 class Op {
    public:
-    // Your definitions here.
-    // Field names must start with capital letters,
-    // otherwise RPC will break.
     std::string Operation;  // "Get" "Put" "Append"
     std::string Key;
     std::string Value;
-    std::string ClientId;  // 客户端号码
-    int RequestId;         // 客户端号码请求的Request的序列号，为了保证线性一致性
-                    //  IfDuplicate bool // Duplicate command can't be applied twice , but only for PUT and APPEND
+    std::string ClientId;  // 客户端标识
+    int RequestId;         // 客户端请求的 Request 序列号，为了保证线性一致性
 
    public:
-    // todo
-    // 为了协调raftRPC中的command只设置成了string,这个的限制就是正常字符中不能包含|
-    // 当然后期可以换成更高级的序列化方法，比如protobuf
+    // 使用 boost 进行序列化
+    // todo：为了协调 raftRPC 中的 command 只设置成了 string，这个的限制就是正常字符中不能包含 |
+    // 当然后期可以换成更高级的序列化方法，比如 protobuf
     std::string asString() const {
         std::stringstream ss;
         boost::archive::text_oarchive oa(ss);
 
-        // write class instance to archive
         oa << *this;
-        // close archive
 
         return ss.str();
     }
@@ -150,7 +144,7 @@ class Op {
         boost::archive::text_iarchive ia(iss);
         // read class state from archive
         ia >> *this;
-        return true;  // todo : 解析失敗如何處理，要看一下boost庫了
+        return true;  // todo: 解析失败如何处理，要看一下 boost 库
     }
 
    public:
@@ -172,30 +166,14 @@ class Op {
     }
 };
 
-///////////////////////////////////////////////kvserver reply err to clerk
+// kvserver reply err to clerk
 
 const std::string OK = "OK";
 const std::string ErrNoKey = "ErrNoKey";
 const std::string ErrWrongLeader = "ErrWrongLeader";
 
-////////////////////////////////////获取可用端口
-
+// 获取可用端口
 bool isReleasePort(unsigned short usPort);
-
 bool getReleasePort(short& port);
-
-// int main(int argc, char** argv)
-//{
-//     short port = 9060;
-//     if(getReleasePort(port)) //在port的基础上获取一个可用的port
-//     {
-//         std::cout << "可用的端口号为：" << port << std::endl;
-//     }
-//     else
-//     {
-//         std::cout << "获取可用端口号失败！" << std::endl;
-//     }
-//     return 0;
-// }
 
 #endif  //  UTIL_H
