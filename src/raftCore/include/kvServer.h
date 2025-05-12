@@ -32,6 +32,7 @@ class KvServer : raftKVRpcProctoc::kvServerRpc {
     std::unordered_map<std::string, std::string> m_kvDB;
 
     // 将每个 log index 映射到一个 Op 队列，用于异步地等待 Raft apply 的响应，用于协调客户端 RPC 调用与状态机实际应用之间的同步
+    // waitApplyCh[logIndex] 是一个“等待通道”，当通过 Raft 提交了某条日志（index = X），就等这个通道 waitApplyCh[X] 里收到结果
     std::unordered_map<int, LockQueue<Op> *> waitApplyCh;
 
     // 一个 kvServer 可能连接多个客户端，记录每个客户端最近一次请求的 requestId，用于幂等控制（防止重复执行）
@@ -55,7 +56,7 @@ class KvServer : raftKVRpcProctoc::kvServerRpc {
 
     void ExecutePutOpOnKVDB(Op op);
 
-    // 将 GetArgs 改为 RPC 调用的（不要与 Get 命令混淆），因为是远程客户端，服务器宕机对客户端来说是无感的
+    // 处理 Get RPC（不要与操作数据库的 Get 命令混淆），因为是远程客户端，服务器宕机对客户端来说是无感的
     void Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetReply *reply);  
 
     // 当 kvServer 从 applyChan 接收到 Raft commit 消息后的回调函数

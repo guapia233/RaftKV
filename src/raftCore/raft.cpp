@@ -1004,12 +1004,10 @@ void Raft::RequestVote(google::protobuf::RpcController* controller, const ::raft
     done->Run();
 }
 
+// 启动 Raft 日志复制流程
 void Raft::Start(Op command, int* newLogIndex, int* newLogTerm, bool* isLeader) {
     std::lock_guard<std::mutex> lg1(m_mtx);
-    //    m_mtx.lock();
-    //    Defer ec1([this]()->void {
-    //       m_mtx.unlock();
-    //    });
+  
     if (m_status != Leader) {
         DPrintf("[func-Start-rf{%d}]  is not leader");
         *newLogIndex = -1;
