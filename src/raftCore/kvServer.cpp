@@ -430,8 +430,9 @@ KvServer::KvServer(int me, int maxraftstate, std::string nodeInforFileName, shor
         }
         ipPortVt.emplace_back(nodeIp, atoi(nodePortStr.c_str()));   
     }
+
+    // 构造 RaftRpcUtil 数组，与其他节点建立 RPC 连接（注意跳过自己）
     std::vector<std::shared_ptr<RaftRpcUtil> > servers;
-    // 构造 RaftRpcUtil，与其他节点建立 RPC 连接（注意跳过自己）
     for (int i = 0; i < ipPortVt.size(); ++i) {
         if (i == m_me) {
             servers.push_back(nullptr);
@@ -441,25 +442,33 @@ KvServer::KvServer(int me, int maxraftstate, std::string nodeInforFileName, shor
         short otherNodePort = ipPortVt[i].second;
         auto *rpc = new RaftRpcUtil(otherNodeIp, otherNodePort);
         servers.push_back(std::shared_ptr<RaftRpcUtil>(rpc));
-
         std::cout << "node" << m_me << " 连接node" << i << "success!" << std::endl;
     }
-    sleep(ipPortVt.size() - me);  // 等待所有节点相互连接成功，再启动raft
+    // 为了等待与所有节点连接成功，再次睡眠等待
+    sleep(ipPortVt.size() - me);  // 
+
+    // 初始化 Raft 节点，包含与其他节点的连接、编号、持久化对象、状态通道等，Raft 就绪后会开始内部心跳、选主、日志复制等流程
     m_raftNode->init(servers, m_me, persister, applyChan);
-    // kv的server直接与raft通信，但kv不直接与raft通信，所以需要把ApplyMsg的chan传递下去用于通信，两者的persist也是共用的
+    // kvServer 直接与 raft 通信，但 kvDB 不直接与 raft 通信，所以需要把 ApplyMsg 的 chan 传递下去用于通信，两者的 persist 也是共用的
 
-    //////////////////////////////////
-
-    // You may need initialization code here.
-    // m_kvDB; //kvdb初始化
+    // todo：可以添加下列的初始化代码，比如初始化 kvDB
     m_skipList;
     waitApplyCh;
     m_lastRequestId;
-    m_lastSnapShotRaftLogIndex = 0;  // todo:感覺這個函數沒什麼用，不如直接調用raft節點中的snapshot值？？？
+    m_lastSnapShotRaftLogIndex = 0;   
+
+    // 从持久化文件中读取快照，如果存在，就读取快照
     auto snapshot = persister->ReadSnapshot();
     if (!snapshot.empty()) {
         ReadSnapShotToInstall(snapshot);
     }
-    std::thread t2(&KvServer::ReadRaftApplyCommandLoop, this);  // 马上向其他节点宣告自己就是leader
-    t2.join();  // 由於ReadRaftApplyCommandLoop一直不會結束，达到一直卡在这的目的
+
+    // 启动 ReadRaftApplyCommandLoop() 死循环，持续从 applyChan 中读取 ApplyMsg
+    // 每次 ApplyMsg 到达，kvServer 会根据命令修改状态、唤醒请求线程等
+    std::thread t2(&KvServer::ReadRaftApplyCommandLoop, this);   
+    t2.join();  // 使用 join() 让主线程阻塞在此，ReadRaftApplyCommandLoop 一直不会结束，保持服务持续运行
+
+
+
+
 }
