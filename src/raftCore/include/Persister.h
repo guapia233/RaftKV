@@ -28,7 +28,7 @@ class Persister {
    */
   std::ofstream m_snapshotOutStream;
   /**
-   * 保存raftStateSize的大小
+   * 保存 raftStateSize 的大小
    * 避免每次都读取文件来获取具体的大小
    */
   long long m_raftStateSize;
