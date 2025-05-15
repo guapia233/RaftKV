@@ -8,15 +8,18 @@
 #include "mprpccontroller.h"
 #include "rpcheader.pb.h"
 #include "util.h"
+
 /**
  * header_size + header(service_name method_name args_size) + args
  * 所有通过 stub 代理对象调用的 rpc 方法，都会到这里统一通过 rpcChannel 来调用方法，统一做数据序列化和网络发送
  */
 void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
-                              google::protobuf::RpcController* controller, const google::protobuf::Message* request,
-                              google::protobuf::Message* response, google::protobuf::Closure* done) {
-        // 如果之前连接断了（文件描述符为 -1），就尝试重新建立 TCP 连接，失败时设置 controller 的错误信息并返回
-        if (m_clientFd == -1) { 
+                              google::protobuf::RpcController* controller, 
+                              const google::protobuf::Message* request,
+                              google::protobuf::Message* response, 
+                              google::protobuf::Closure* done) {
+    // 如果之前连接断了（文件描述符为 -1），就尝试重新建立 TCP 连接，失败时设置 controller 的错误信息并返回
+    if (m_clientFd == -1) { 
         std::string errMsg;
         bool rt = newConnect(m_ip.c_str(), m_port, &errMsg);
         if (!rt) {
@@ -60,9 +63,15 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     // 使用 protobuf 的 CodedOutputStream 来构建发送的数据流
     std::string send_rpc_str;  // 用来保存最终发送的数据
     {
-        // 创建一个 StringOutputStream 用于写入 send_rpc_str
+        // 创建一个 StringOutputStream 用于将数据最终写入到创建的 send_rpc_str 中，相当于是 CodedOutputStream 和 send_rpc_str 之间的桥梁
         google::protobuf::io::StringOutputStream string_output(&send_rpc_str);
         google::protobuf::io::CodedOutputStream coded_output(&string_output);
+
+        /**
+         * Protocol Buffers 的变长编码：
+         * 用一个或多个字节来编码一个整数，小的数只用一个字节，大的数才会用多个字节，目的是节省空间，尤其是对小整数
+         * 编码规则是：每个字节用最低7位来存储数据；最高位（第8位）是继续位：若为1，表示后面还有字节；若为0：表示这是最后一个字节
+         */
 
         // 先写入 header 的长度（变长编码）
         coded_output.WriteVarint32(static_cast<uint32_t>(rpc_header_str.size()));
@@ -125,6 +134,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     }
 }
 
+// 建立一个 TCP 连接，连接到给定的 ip:port 上，连接成功则更新 m_clientFd，失败则返回错误信息
 bool MprpcChannel::newConnect(const char* ip, uint16_t port, string* errMsg) {
     int clientfd = socket(AF_INET, SOCK_STREAM, 0);
     if (-1 == clientfd) {
@@ -135,11 +145,13 @@ bool MprpcChannel::newConnect(const char* ip, uint16_t port, string* errMsg) {
         return false;
     }
 
+    // 构造目标地址结构体
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
     server_addr.sin_addr.s_addr = inet_addr(ip);
-    // 连接rpc服务节点
+
+    // 连接 rpc 服务节点
     if (-1 == connect(clientfd, (struct sockaddr*)&server_addr, sizeof(server_addr))) {
         close(clientfd);
         char errtxt[512] = {0};
@@ -149,20 +161,22 @@ bool MprpcChannel::newConnect(const char* ip, uint16_t port, string* errMsg) {
         return false;
     }
     m_clientFd = clientfd;
+
     return true;
 }
 
+// 构造函数：创建通道对象，记录 IP、端口，并根据 connectNow 参数决定是否立即尝试连接 RPC 服务端
 MprpcChannel::MprpcChannel(string ip, short port, bool connectNow) : m_ip(ip), m_port(port), m_clientFd(-1) {
-    // 使用tcp编程，完成rpc方法的远程调用，使用的是短连接，因此每次都要重新连接上去，待改成长连接。
-    // 没有连接或者连接已经断开，那么就要重新连接呢,会一直不断地重试
-    // 读取配置文件rpcserver的信息
-    // std::string ip = MprpcApplication::GetInstance().GetConfig().Load("rpcserverip");
-    // uint16_t port = atoi(MprpcApplication::GetInstance().GetConfig().Load("rpcserverport").c_str());
-    // rpc调用方想调用service_name的method_name服务，需要查询zk上该服务所在的host信息
-    //  /UserServiceRpc/Login
-    if (!connectNow) {
+    /**
+     * todo：当前使用的是 TCP socket 实现远程调用，是短连接，即每次调用 RPC 方法都重新建立一次连接（类似 HTTP 1.0），待优化成长连接
+     * todo：从 Zookeeper 注册中心上查询这个服务实际在哪台机器（host）上，而不是手动指定 IP 和端口（静态服务发现）
+     */
+
+    if (!connectNow) { // 表示允许延迟连接（即还不立刻尝试连接，而是等真正调用 RPC 方法时再连）
         return;
-    }  // 可以允许延迟连接
+    }  
+
+    // 尝试连接
     std::string errMsg;
     auto rt = newConnect(ip.c_str(), port, &errMsg);
     int tryCount = 3;
