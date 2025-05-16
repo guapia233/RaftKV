@@ -7,6 +7,7 @@
 #include <string>
 #include "rpcheader.pb.h"
 #include "util.h"
+
 /*
 service_name =>  service描述
                         =》 service* 记录服务对象
@@ -15,7 +16,7 @@ json   protobuf
 */
 // 这里是框架提供给外部使用的，可以发布rpc方法的函数接口
 // 只是简单的把服务描述符和方法描述符全部保存在本地而已
-// todo 待修改 要把本机开启的ip和端口写在文件里面
+// todo：要把本机开启的ip和端口写在文件里面
 void RpcProvider::NotifyService(google::protobuf::Service *service) {
     ServiceInfo service_info;
 
