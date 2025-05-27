@@ -1051,7 +1051,7 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
      */
     m_peers = peers;           
     m_persister = persister;   
-    m_me = me;                // 标记自己，不能给自己发送 rpc
+    m_me = me; // 标记自己，不能给自己发送 rpc
    
     m_mtx.lock(); // 线程安全，防止并发初始化
     
