@@ -1033,50 +1033,66 @@ void Raft::Start(Op command, int* newLogIndex, int* newLogTerm, bool* isLeader) 
     *isLeader = true;
 }
 
-// Make
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
+/**
+ * 初始化一个 Raft 节点
+ * 所有 Raft 节点的通信端口都存在 peers[] 中，本节点的端口是 peers[me]，所有节点的 peers[] 顺序一致，用于统一编号和通信
+ * 持久化器 persister 用于保存当前节点的 Raft 状态，如：term、log、快照，同时也包含重启时恢复用的状态
+ * applyCh 是服务用于接收 Raft 发来的 ApplyMsg 的通道
+ * init() 必须快速返回，因此长时间运行的任务应另起线程或协程
+ */
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
                 std::shared_ptr<LockQueue<ApplyMsg>> applyCh) {
-    m_peers = peers;          // 与其他节点沟通的 rpc 类
-    m_persister = persister;  // 持久化类
+    /**
+     * 参数：
+     * peers: 所有节点的 RPC 通信对象数组
+     * me: 当前节点在 peers 中的下标
+     * persister: 用于存储 Raft 状态
+     * applyCh: 与上层服务通信的消息通道
+     */
+    m_peers = peers;           
+    m_persister = persister;   
     m_me = me;                // 标记自己，不能给自己发送 rpc
-    // Your initialization code here (2A, 2B, 2C).
-    m_mtx.lock();
+   
+    m_mtx.lock(); // 线程安全，防止并发初始化
+    
+    /**
+     * 核心状态初始化（2A、2B、2C）
+     * 在 MIT 6.824 分布式系统课程中，2A、2B、2C 通常指的是实验的不同阶段，每一阶段要求实现 Raft 协议的核心功能
+     * 2A：Leader 选举
+     * 2B：日志复制 
+     * 2C：日志持久化和日志应用
+     */
 
-    // applier
-    this->applyChan = applyCh;  // 与 KV-server 沟通
-    //    rf.ApplyMsgQueue = make(chan ApplyMsg)
+    this->applyChan = applyCh;  // 与 kvServer 交互
+
     m_currentTerm = 0;    // 任期初始化为0
-    m_status = Follower;  // 初始化身份为 follower
-    m_commitIndex = 0;    // 初始化提交的日志索引
-    m_lastApplied = 0;    // 初始化提交到状态机的日志
-    m_logs.clear();
+    m_status = Follower;  // 初始化身份为 Follower
+    m_commitIndex = 0;    // 初始化日志提交索引
+    m_lastApplied = 0;    // 初始化应用到状态机的日志索引
+    m_logs.clear(); // 清空日志
+
+    // matchIndex[]: Leader 记录每个 Follower 日志匹配到哪一条
+    // nextIndex[]: Leader 记录向每个 Follower 发送下一条日志的 index
     for (int i = 0; i < m_peers.size(); i++) {
-        m_matchIndex.push_back(0);  // 表示没有日志条目已提交或已应用
+        m_matchIndex.push_back(0);   
         m_nextIndex.push_back(0);
     }
 
-    m_votedFor = -1;  // 表示未有投票对象
+    m_votedFor = -1;  // 表示还没投过票
 
+    // 快照字段初始化
     m_lastSnapshotIncludeIndex = 0;
     m_lastSnapshotIncludeTerm = 0;
     m_lastResetElectionTime = now();
     m_lastResetHearBeatTime = now();
 
-    // initialize from state persisted before a crash
-    readPersist(m_persister->ReadRaftState());  // 持久化存储中恢复 raft 状态
-    // 如果 m_lastSnapshotIncludeIndex > 0，则将 m_lastApplied 设置为该值，这是为了确保在崩溃后能够从快照中恢复状态
+    // 如果之前出现故障，从持久化中恢复
+    readPersist(m_persister->ReadRaftState());  // 从持久化存储中恢复 raft 节点状态
+    // 如果当前状态是基于快照恢复的（即有快照），则将状态机已经应用的日志索引 m_lastApplied 设置为快照中最后一个包含的日志索引
+    // 避免状态机重复应用快照之前的日志，保证状态机状态与快照保持一致
     if (m_lastSnapshotIncludeIndex > 0) {
         m_lastApplied = m_lastSnapshotIncludeIndex;
-        // rf.commitIndex = rf.lastSnapshotIncludeIndex   todo ：崩溃恢复为何不能读取commitIndex
+        // rf.commitIndex = rf.lastSnapshotIncludeIndex   todo：崩溃恢复为何不能读取 commitIndex
     }
 
     DPrintf("[Init&ReInit] Sever %d, term %d, lastSnapshotIncludeIndex {%d} , lastSnapshotIncludeTerm {%d}", m_me,
@@ -1084,16 +1100,19 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
 
     m_mtx.unlock();  // 完成初始化后解锁，以便其他线程或协程可以访问共享数据
 
-    m_ioManager = std::make_unique<monsoon::IOManager>(FIBER_THREAD_NUM, FIBER_USE_CALLER_THREAD);
 
     /**
-     * 启动三个循环定时器
-     * 原来是启动了三个线程，现在是直接使用了协程，三个函数中 leaderHearBeatTicker、electionTimeOutTicker
-     * 的执行时间是恒定的 applierTicker 时间受到数据库响应延迟和两次 apply
-     * 之间请求数量的影响，这个随着数据量增多可能不太合理，最好其还是启用一个线程
+     * 启动三个循环定时器：
+     *     -leaderHeartBeatTicker：Leader 周期性发送心跳
+     *     -electionTimeOutTicker：Follower 检测选举超时
+     *     -applierTicker：定期将日志应用到状态机中
+     * 原本是启动了三个线程，现在改为前两个使用协程，另一个还是线程
+     * 因为 leaderHearBeatTicker() 和 electionTimeOutTicker()的执行时间恒定，没有 IO 阻塞，逻辑轻，适合用协程
+     * 而 applierTicker() 时间受到数据库响应延迟和两次 apply 之间请求数量的影响，这个随着数据量增多性能可能会降低，最好还是启用一个线程
      */
-    m_ioManager->scheduler([this]() -> void { this->leaderHearBeatTicker(); });
+    m_ioManager = std::make_unique<monsoon::IOManager>(FIBER_THREAD_NUM, FIBER_USE_CALLER_THREAD);
 
+    m_ioManager->scheduler([this]() -> void { this->leaderHearBeatTicker(); });
     m_ioManager->scheduler([this]() -> void { this->electionTimeOutTicker(); });
 
     std::thread t3(&Raft::applierTicker, this);

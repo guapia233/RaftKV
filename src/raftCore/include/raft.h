@@ -57,8 +57,8 @@ class Raft : public raftRpcProctoc::raftRpc {
     std::shared_ptr<LockQueue<ApplyMsg>> applyChan;  // client 从这里取日志（2B），client 与 raft 通信的接口
     // ApplyMsgQueue chan ApplyMsg // raft 内部使用的 chan，applyChan 是用于和服务层交互，最后好像没用上
 
-    std::chrono::_V2::system_clock::time_point m_lastResetElectionTime;  // 选举超时
-    std::chrono::_V2::system_clock::time_point m_lastResetHearBeatTime;  // 心跳超时
+    std::chrono::_V2::system_clock::time_point m_lastResetElectionTime;  // 最近一次选举时间
+    std::chrono::_V2::system_clock::time_point m_lastResetHearBeatTime;  // 最近一次收到心跳时间
 
     // 用于传入快照点，储存快照中的最后一个日志的 Index 和 Term
     int m_lastSnapshotIncludeIndex;
