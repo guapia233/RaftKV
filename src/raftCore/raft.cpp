@@ -266,7 +266,8 @@ void Raft::doElection() {
     }
 }
 
-// 实际发送心跳
+// 向每个 Follower 发送心跳（空的 AppendEntries RPC）或日志条目（正常同步日志）或启用新线程发送快照（Follower 落后太多）
+// 并更新 m_lastResetHearBeatTime，用于心跳节奏控制
 void Raft::doHeartBeat() {
     std::lock_guard<std::mutex> g(m_mtx);
 
@@ -293,10 +294,10 @@ void Raft::doHeartBeat() {
             }
 
             // 发送 AppendEntries
-            // 构造请求参数的发送
+            // 构造请求参数
             int preLogIndex = -1;
             int PrevLogTerm = -1;
-            // 获取第i个 follower 拥有最后匹配条目的索引和任期
+            // 获取第 i 个 follower 最后匹配的日志条目的索引和任期
             getPrevLogInfo(i, &preLogIndex, &PrevLogTerm);
             std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> appendEntriesArgs =
                 std::make_shared<raftRpcProctoc::AppendEntriesArgs>();
@@ -304,8 +305,9 @@ void Raft::doHeartBeat() {
             appendEntriesArgs->set_leaderid(m_me);
             appendEntriesArgs->set_prevlogindex(preLogIndex);
             appendEntriesArgs->set_prevlogterm(PrevLogTerm);
-            appendEntriesArgs->clear_entries(); // 防止有残留的日志条目信息和新的一起发送出去
             appendEntriesArgs->set_leadercommit(m_commitIndex);
+            appendEntriesArgs->clear_entries(); // 清空可能复用的 protobuf 结构体里的残留日志，防止有残留的日志条目信息和新的一起发送出去
+           
 
             // 说明该 follower 的日志不是快照中的最后一条日志，因此直接从日志数组中提取日志条目，从 preLogIndex+1 开始发，直到 m_logs 的末尾
             if (preLogIndex != m_lastSnapshotIncludeIndex) {
@@ -526,7 +528,7 @@ void Raft::leaderHearBeatTicker() {
         {
             std::lock_guard<std::mutex> lock(m_mtx);
             wakeTime = now();
-            // 睡眠时间计算公式 = 心跳周期 - 当前时间
+            // 睡眠时间计算公式 = 上一次心跳时间点 + 心跳周期 - 当前时间
             suitableSleepTime = std::chrono::milliseconds(HeartBeatTimeout) + m_lastResetHearBeatTime - wakeTime;
         }
 
@@ -646,26 +648,24 @@ void Raft::persist() {
     // rf.votedFor, rf.logs) fmt.Printf("%v\n", string(data))
 }
 
-// 响应 sendRequestVote()，是否投票给他让其成为 leader
+// 响应 sendRequestVote()，即 Candidate 节点发来的 RequestVote RPC，判断是否投票给他让其成为 Leader
 void Raft::RequestVote(const raftRpcProctoc::RequestVoteArgs* args, raftRpcProctoc::RequestVoteReply* reply) {
-    std::lock_guard<std::mutex> lg(m_mtx);
+    std::lock_guard<std::mutex> lg(m_mtx); // 加锁，防止竞态
 
-    // Your code here (2A, 2B).
-    DEFER {
-        // 应该先持久化，再撤销 lock
-        persist(); // 要在锁释放前更新状态避免在锁释放后才更新，导致状态被别人更新
+    DEFER { // 确保即使提前 return，也会在退出前调用 persist()
+        persist(); // 应该先持久化，再撤销 lock，要在锁释放前更新状态避免在锁释放后才更新，导致状态被别人更新
     };
 
-    // 任何情况下都应该检查任期，对 args 的任期与当前任期对比的三种情况分别进行处理
+    // 任何情况下都应该检查任期，对 Candidate 的任期与当前任期对比的三种情况分别进行处理：
 
-    // 情况1：candidate 的任期小于自己的任期，说明出现了网络分区，该候选者已经 OutOfDate（过时）
+    // 情况1：Candidate 的任期小于自己的任期，说明出现了网络分区，该候选者已经 OutOfDate（过时），因此拒绝给他投票，然后直接返回
     if (args->term() < m_currentTerm) {
         reply->set_term(m_currentTerm);
         reply->set_votestate(Expire);
         reply->set_votegranted(false); // 投票失败
         return;
     }
-    // 情况2：candidate 的任期大于自己的任期，如果自己也是候选者，那么应该更新 term，并主动退让为 follower
+    // 情况2：Candidate 的任期大于自己的任期。如果自己也是候选者，那么应该更新 term，并主动退让为 Follower
     if (args->term() > m_currentTerm) {
         //        DPrintf("[	    func-RequestVote-rf(%v)		] : 变成follower且更新term
         //        因为candidate{%v}的term{%v}> rf{%v}.term{%v}\n ", rf.me, args.CandidateId, args.Term, rf.me,
@@ -680,7 +680,7 @@ void Raft::RequestVote(const raftRpcProctoc::RequestVoteArgs* args, raftRpcProct
     myAssert(args->term() == m_currentTerm,
              format("[func--rf{%d}] 前面校验过args.Term==rf.currentTerm，这里却不等", m_me));
 
-    // 现在两节点的任期都是相同的，还需要检查 log 的 term 和 index 是不是匹配的
+    // 情况3：两节点的任期都是相同的，还需要检查 log 的 term 和 index 是不是匹配的
     int lastLogTerm = getLastLogTerm();
     
     // UpToDate 函数用于比较候选者的日志是否比自己的新，只有候选者的日志至少与当前节点一样新时，才会考虑投给它
@@ -807,15 +807,13 @@ int Raft::getSlicesIndexFromLogIndex(int logIndex) {
 // 用于 candidate 向其他节点发送 RequestVote RPC 请求，以争取选票成为集群的 leader
 bool Raft::sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVoteArgs> args,
                            std::shared_ptr<raftRpcProctoc::RequestVoteReply> reply, std::shared_ptr<int> votedNum) {
-    // 这个ok是网络是否正常通信的ok，而不是requestVote rpc是否投票的rpc
-    //  ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-    //  todo
     auto start = now();
     DPrintf("[func-sendRequestVote rf{%d}] 向server{%d} 發送 RequestVote 開始", m_me, m_currentTerm, getLastLogIndex());
     bool ok = m_peers[server]->RequestVote(args.get(), reply.get());  // 接收其他 raft 节点的返回结果
     DPrintf("[func-sendRequestVote rf{%d}] 向server{%d} 發送 RequestVote 完畢，耗時:{%d} ms", m_me, m_currentTerm,
             getLastLogIndex(), now() - start);
 
+    // 这个 ok 表示网络是否能正常通信，而不是 是否投票
     if (!ok) {
         return ok;  // RPC 通信失败就立刻返回，避免浪费资源
     }
@@ -827,7 +825,7 @@ bool Raft::sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVo
     //	//}
     // } //这里是发送出去了，但是不能保证他一定到达
 
-    // 对回应进行处理，无论什么时候收到回复都要检查 term
+    // 已经发送过去了，现在对回应进行处理，无论什么时候收到回复都要检查 term
     std::lock_guard<std::mutex> lg(m_mtx);
     // 如果别的节点回复的 term 比自己的大，说明自己落后了，就退回 follower 状态并把 term 更新为较大的那个
     if (reply->term() > m_currentTerm) {
