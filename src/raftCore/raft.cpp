@@ -878,17 +878,14 @@ bool Raft::sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVo
 bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
                              std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply,
                              std::shared_ptr<int> appendNums) {
-    // 这个ok是网络是否正常通信的ok，而不是requestVote rpc是否投票的rpc
-    //  如果网络不通的话肯定是没有返回的，不用一直重试
-    //  todo： paper中5.3节第一段末尾提到，如果append失败应该不断的retries ,直到这个log成功的被store
-    DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc開始 ， args->entries_size():{%d}",
+    DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc开始 ， args->entries_size():{%d}",
             m_me, server, args->entries_size());
     
     // 调用 RPC 发送 AppendEntries 请求并等待响应，ok 表示 RPC 调用成功，而不是请求的逻辑处理结果
     bool ok = m_peers[server]->AppendEntries(args.get(), reply.get());
 
     if (!ok) { // 如果 RPC 调用失败（比如网络问题）
-        DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc失敗", m_me, server);
+        DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc失败", m_me, server);
         return ok;
     }
     DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc成功", m_me, server);
@@ -934,7 +931,7 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
         }
     } else { // 日志匹配，更新 appendNums 和相关索引
         *appendNums = *appendNums + 1; // 表示有一个 follower 接收了日志或心跳
-        DPrintf("---------------------------tmp------------------------- 節點{%d}返回true,當前*appendNums{%d}", server,
+        DPrintf("---------------------------tmp------------------------- 节点{%d}返回true,当前*appendNums{%d}", server,
                 *appendNums);
         // rf.matchIndex[server] = len(args.Entries) //只要返回一个响应就对其matchIndex应该对其做出反应，
         // 但是这么修改是有问题的，如果对某个消息发送了多遍（心跳时就会再发送），那么一条消息会导致n次上涨
@@ -965,7 +962,7 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
             if (args->entries_size() > 0 && args->entries(args->entries_size() - 1).logterm() == m_currentTerm) {
                 DPrintf(
                     "---------------------------tmp------------------------- "
-                    "當前term有log成功提交，更新leader的m_commitIndex "
+                    "当前term有log成功提交，更新leader的m_commitIndex "
                     "from{%d} to{%d}",
                     m_commitIndex, args->prevlogindex() + args->entries_size());
 
