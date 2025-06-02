@@ -67,7 +67,7 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
     }
     // 本机日志有那么长，冲突(same index,different term),截断日志
     // 注意：这里目前当 args.PrevLogIndex == rf.lastSnapshotIncludeIndex 与不等的时候要分开考虑，可以看看能不能优化这块
-    if (matchLog(args->prevlogindex(), args->prevlogterm())) {
+    if (matchLog(args->prevlogindex(), args->prevlogterm())) { // 判断「Follower 缺失的第一个日志条目的前一个条目是否与 Leader 的一致。」
         // todo：整理logs，不能直接截断，必须一个一个检查，因为发送来的 log 可能是之前的，直接截断可能导致“取回”已经在 follower 日志中的条目
         // 那意思是不是可能会有一段发来的 AE 中的 logs 中前半是匹配的，后半是不匹配的，这种应该：1.follower如何处理？ 2.如何给leader回复 3. leader如何处理
 
@@ -628,7 +628,7 @@ void Raft::leaderUpdateCommitIndex() {
     //    %d",rf.me,rf.me,rf.currentTerm,rf.commitIndex)
 }
 
-// 进来前要保证logIndex是存在的，即≥rf.lastSnapshotIncludeIndex	，而且小于等于rf.getLastLogIndex()
+// 进来前要保证 logIndex 是存在的，即 ≥rf.lastSnapshotIncludeIndex，而且小于等于 rf.getLastLogIndex()
 bool Raft::matchLog(int logIndex, int logTerm) {
     myAssert(logIndex >= m_lastSnapshotIncludeIndex && logIndex <= getLastLogIndex(),
              format("不满足：logIndex{%d}>=rf.lastSnapshotIncludeIndex{%d}&&logIndex{%d}<=rf.getLastLogIndex{%d}",
@@ -979,6 +979,7 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
     return ok;
 }
 
+// RPC 接口函数
 void Raft::AppendEntries(google::protobuf::RpcController* controller,
                          const ::raftRpcProctoc::AppendEntriesArgs* request,
                          ::raftRpcProctoc::AppendEntriesReply* response, ::google::protobuf::Closure* done) {
