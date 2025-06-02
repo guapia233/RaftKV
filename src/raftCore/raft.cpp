@@ -8,9 +8,10 @@
 // 接收 leader 发送的日志追加条目请求，检查当前日志是否匹配并同步 leader 的日志到本机
 void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpcProctoc::AppendEntriesReply* reply) {
     std::lock_guard<std::mutex> locker(m_mtx);
-    reply->set_appstate(AppNormal);  // 能接收到代表网络是正常的
-    // Your code here (2A, 2B).
 
+    reply->set_appstate(AppNormal);  // 能接收到代表网络是正常的
+
+    // Your code here (2A, 2B).
     // 不同的节点收到 AppendEntries 的反应是不同的，要注意无论什么时候收到 rpc 请求和响应都要检查 term
     if (args->term() < m_currentTerm) { // 如果 leader 的任期小于自己的
         reply->set_success(false);
@@ -40,9 +41,9 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
     }
 
     myAssert(args->term() == m_currentTerm, format("assert {args.Term == rf.currentTerm} fail"));
+
     // 如果发生网络分区，那么 candidate 可能会收到同一个 term 的 leader 的消息，要转变为 follower 
     m_status = Follower;  // 这里是有必要的，因为如果 candidate 收到同一个 term 的 leader 的 AE，需要变成 follower
-    
     m_lastResetElectionTime = now(); // 重置定时器的作用是告诉当前分区已经有了 leader，避免重复选举
     //  DPrintf("[	AppendEntries-func-rf(%v)		] 重置了选举超时定时器\n", rf.me);
 
@@ -893,8 +894,8 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
     if (reply->appstate() == Disconnected) { // RPC 调用成功，但 follower 由于网络分区或其他原因未能处理请求
         return ok;
     }
-    std::lock_guard<std::mutex> lg1(m_mtx);
 
+    std::lock_guard<std::mutex> lg1(m_mtx);
     // 对 reply 进行处理，无论什么时候都要检查 term
     if (reply->term() > m_currentTerm) { // 说明自己的 term 过时，降级为 follower，并更新 term 和 votedFor
         m_status = Follower;
